@@ -13,8 +13,9 @@ confy = "0.4.0"
 serde = "1.0.117"
 serde_derive = "1.0.117"
 serde_json = "1.0.59"
+iced = "0.1.1"
+iced_futures = "0.1.2"
 
-[dependencies.iced]
+#[dependencies.iced]
 #git = "https://github.com/hecrj/iced.git"
 #features = ["glow"]
-version = "0.1.1"

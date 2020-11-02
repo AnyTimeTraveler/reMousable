@@ -1,6 +1,7 @@
 use iced::*;
 
-use crate::{start_client, work};
+use crate::work;
+use crate::work::State;
 
 pub struct Gui {
     address_field: text_input::State,
@@ -13,7 +14,7 @@ pub struct Gui {
 #[derive(Debug, Clone)]
 pub enum Message {
     ConnectPressed,
-    StatusChange(String),
+    StatusChange(State),
     TextChange,
 }
 
@@ -42,7 +43,8 @@ impl Application for Gui {
 
     fn subscription(&self) -> Subscription<Message> {
         if self.do_connect {
-            work::connect(self.address.clone()).map(Message::StatusChange)
+            work::connect(self.address.clone())
+                .map(|state| { Message::StatusChange(state) })
         } else {
             Subscription::none()
         }
@@ -55,7 +57,12 @@ impl Application for Gui {
                 self.status = "Connecting...".to_string();
             }
             Message::StatusChange(status) => {
-                self.status = status;
+                self.status = match status {
+                    State::Ready(_) => "Ready to connect...".to_string(),
+                    State::Connected(_) => "Connected!".to_string(),
+                    State::Disconnected(message) => format!("Disconnected: {}", message),
+                    State::Error(message) => format!("Error: {}", message),
+                };
             }
             Message::TextChange => {}
         }

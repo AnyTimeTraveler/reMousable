@@ -2009,6 +2009,7 @@ dependencies = [
  "confy",
  "enigo",
  "iced",
+ "iced_futures",
  "serde",
  "serde_derive",
  "serde_json",

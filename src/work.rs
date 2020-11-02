@@ -1,9 +1,10 @@
 use websocket::{ClientBuilder, OwnedMessage};
 use enigo::{Enigo, MouseButton, MouseControllable};
 use iced::futures;
+use websocket::client::sync::Client;
+use websocket::websocket_base::stream::sync::TcpStream;
 
-// Just a little utility function
-pub fn connect<T: ToString>(url: T) -> iced::Subscription<Progress> {
+pub fn connect<T: ToString>(url: T) -> iced::Subscription<State> {
     iced::Subscription::from_recipe(Worker {
         url: url.to_string(),
     })
@@ -13,12 +14,21 @@ pub struct Worker {
     url: String,
 }
 
+const TABLET_MAX_X: i64 = 20966;
+const TABLET_MAX_Y: i64 = 15725;
 
-impl<H, I> iced_native::subscription::Recipe<H, I> for Worker
+const SCREEN_MAX_X: i64 = 1920;
+const SCREEN_MAX_Y: i64 = 1080;
+
+const RATIO_X: i64 = TABLET_MAX_X / SCREEN_MAX_X;
+const RATIO_Y: i64 = TABLET_MAX_Y / SCREEN_MAX_Y;
+
+
+impl<H, I> iced_futures::subscription::Recipe<H, I> for Worker
     where
         H: std::hash::Hasher,
 {
-    type Output = String;
+    type Output = State;
 
     fn hash(&self, state: &mut H) {
         use std::hash::Hash;
@@ -31,57 +41,47 @@ impl<H, I> iced_native::subscription::Recipe<H, I> for Worker
         self: Box<Self>,
         _input: futures::stream::BoxStream<'static, I>,
     ) -> futures::stream::BoxStream<'static, Self::Output> {
-        Box::pin(futures::stream::unfold(
+        Box::pin(
+            futures::stream::unfold(
             State::Ready(self.url),
             |state| async move {
                 match state {
-                    State::Ready(url) => {
-                        let response = reqwest::get(&url).await;
-
-                        match response {
-                            Ok(response) => {
-                                if let Some(total) = response.content_length() {
-                                    Some((
-                                        Progress::Started,
-                                        State::Downloading {
-                                            response,
-                                            total,
-                                            downloaded: 0,
-                                        },
-                                    ))
-                                } else {
-                                    Some((Progress::Errored, State::Finished))
-                                }
-                            }
-                            Err(_) => {
-                                Some((Progress::Errored, State::Finished))
-                            }
+                    State::Ready(address) => {
+                        let client_builder = ClientBuilder::new(address.as_str());
+                        if let Err(error) = client_builder {
+                            return Some(State::Error(error.to_string()));
                         }
-                    }
-                    State::Downloading {
-                        mut response,
-                        total,
-                        downloaded,
-                    } => match response.chunk().await {
-                        Ok(Some(chunk)) => {
-                            let downloaded = downloaded + chunk.len() as u64;
 
-                            let percentage =
-                                (downloaded as f32 / total as f32) * 100.0;
-
-                            Some((
-                                Progress::Advanced(percentage),
-                                State::Downloading {
-                                    response,
-                                    total,
-                                    downloaded,
-                                },
-                            ))
-                        }
-                        Ok(None) => Some((Progress::Finished, State::Finished)),
-                        Err(_) => Some((Progress::Errored, State::Finished)),
+                        Some(match client_builder.unwrap().connect_insecure(){
+                            Ok(client) => State::Connected(client),
+                            Err(error) => State::Error(error.to_string())
+                        })
                     },
-                    State::Finished => {
+                    State::Connected(mut client) => {
+                        let mut enigo = Enigo::new();
+                        let mut is_down = false;
+
+
+                        loop {
+                            let packet = client.recv_message();
+                            if let Err(error) = packet {
+                                return Some(State::Disconnected(error.to_string()));
+                            }
+
+                            if let OwnedMessage::Text(text) = packet.unwrap() {
+                                let dots: [i64; 3] = serde_json::from_str(text.as_str()).unwrap();
+                                if !is_down && dots[2] > 0 {
+                                    enigo.mouse_down(MouseButton::Left);
+                                    is_down = true;
+                                } else if is_down && dots[2] == 0 {
+                                    enigo.mouse_up(MouseButton::Left);
+                                    is_down = false;
+                                }
+                                enigo.mouse_move_to((dots[0] / RATIO_X) as i32, (dots[1] / RATIO_Y) as i32);
+                            }
+                        }
+                    },
+                    State::Disconnected(_) | State::Error(_) => {
                         // We do not let the stream die, as it would start a
                         // new download repeatedly if the user is not careful
                         // in case of errors.
@@ -95,42 +95,11 @@ impl<H, I> iced_native::subscription::Recipe<H, I> for Worker
     }
 }
 
+
 #[derive(Debug, Clone)]
-pub enum Progress {
-    Started,
-    Advanced(f32),
-    Finished,
-    Errored,
-}
-
 pub enum State {
-    Ready,
-    Connected,
-    Disconnected,
-}
-
-
-
-pub fn start_client(address: String) {
-    let mut client = ClientBuilder::new(address.as_str()).unwrap()
-        .connect_insecure().unwrap();
-
-    let mut enigo = Enigo::new();
-
-    let mut is_down = false;
-
-    while let Ok(packet) = client.recv_message() {
-        println!("Incomming: {:?}", packet.clone());
-        if let OwnedMessage::Text(text) = packet {
-            let dots: [i64; 3] = serde_json::from_str(text.as_str()).unwrap();
-            if !is_down && dots[2] > 0 {
-                enigo.mouse_down(MouseButton::Left);
-                is_down = true;
-            } else if is_down && dots[2] == 0 {
-                enigo.mouse_up(MouseButton::Left);
-                is_down = false;
-            }
-            enigo.mouse_move_to((dots[0] / RATIO_X) as i32, (dots[1] / RATIO_Y) as i32);
-        }
-    }
+    Ready(String),
+    Connected(Client<TcpStream>),
+    Disconnected(String),
+    Error(String),
 }
